@@ -9,7 +9,7 @@ import io
 from gfpgan import GFPGANer
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
 
 # Define input and output folders
 INPUT_FOLDER = "images/input"
@@ -118,19 +118,19 @@ def process_images(src_image_path, bgr_image_path, output_path):
 
     return png_buffer
 
-@app.route("/upload-images", methods=["POST"])
+@app.route("/api/swap-face/", methods=["POST"])
 def upload_images():
     try:
-        print("[DEBUG] Received request to /upload-images")
+        print("[DEBUG] Received request to /api/swap-face/")
 
         # Check if files are present in the request
-        if "src_image" not in request.files or "bgr_image" not in request.files:
+        if "sourceImage" not in request.files or "bgr_image" not in request.files:
             print("[DEBUG] Missing source or background image in request.")
             return jsonify({"error": "Both source and background images are required."}), 400
 
         # Get the uploaded files
-        src_image = request.files["src_image"]
-        bgr_image = request.files["bgr_image"]
+        src_image = request.files["bgr_image"]  # Changed from src_image to sourceImage
+        bgr_image = request.files["sourceImage"]
 
         # Save the uploaded files to the input folder
         src_image_path = os.path.join(INPUT_FOLDER, "src_image.jpg")
