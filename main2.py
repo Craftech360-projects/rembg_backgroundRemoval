@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import io
 from gfpgan import GFPGANer
+import requests
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "http://localhost:5173"}})
@@ -118,7 +119,7 @@ def process_images(src_image_path, bgr_image_path, output_path):
 
     return png_buffer
 
-@app.route("/api/swap-face/", methods=["POST"])
+@app.route("/api/removebg/", methods=["POST"])
 def upload_images():
     try:
         print("[DEBUG] Received request to /api/swap-face/")
@@ -147,6 +148,107 @@ def upload_images():
         print("[DEBUG] Starting image processing...")
         png_buffer = process_images(src_image_path, bgr_image_path, output_path)
         print("[DEBUG] Image processing completed.")
+
+        # Return the processed image as a response
+        png_buffer.seek(0)  # Reset buffer position to the beginning
+        return send_file(png_buffer, mimetype="image/png")
+
+    except Exception as e:
+        print(f"[DEBUG] Error occurred: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+    
+    
+    
+def remove_background_with_clipdrop(image_path):
+    """
+    Remove background using ClipDrop API.
+    """
+    print("[DEBUG] Removing background using ClipDrop API...")
+    api_key = "b54780508fd1d61abff1eb2eaa6eaa4b157ffb81e4328a4e7a428cb227cdd89053193f68473f838eb0466c2174195482"  # Replace with your ClipDrop API key
+    url = "https://clipdrop-api.co/remove-background/v1"
+
+    with open(image_path, "rb") as image_file:
+        response = requests.post(
+            url,
+            files={"image_file": image_file},
+            headers={"x-api-key": api_key}
+        )
+
+    if response.status_code == 200:
+        return response.content
+    else:
+        raise Exception(f"ClipDrop API request failed with status code {response.status_code}: {response.text}")
+@app.route("/api/clip-drop/", methods=["POST"])
+def upload_images_clipdrop():
+    try:
+        print("[DEBUG] Received request to /api/clip-drop/")
+
+        # Check if files are present in the request
+        if "sourceImage" not in request.files or "bgr_image" not in request.files:
+            print("[DEBUG] Missing source or background image in request.")
+            return jsonify({"error": "Both source and background images are required."}), 400
+
+        # Get the uploaded files
+        src_image = request.files["bgr_image"]
+        bgr_image = request.files["sourceImage"]
+
+        # Save the uploaded files to the input folder
+        src_image_path = os.path.join(INPUT_FOLDER, "src_image.jpg")
+        bgr_image_path = os.path.join(INPUT_FOLDER, "bgr_image.jpg")
+        src_image.save(src_image_path)
+        bgr_image.save(bgr_image_path)
+        print(f"[DEBUG] Source image saved to: {src_image_path}")
+        print(f"[DEBUG] Background image saved to: {bgr_image_path}")
+
+        # Define the output path
+        output_path = os.path.join(OUTPUT_FOLDER, "final_output.png")
+        clipdrop_output_path = os.path.join(OUTPUT_FOLDER, "clipdropg.png")
+
+        # Process the images
+        print("[DEBUG] Starting image processing with ClipDrop...")
+        enhanced_image = enhance_image_with_gfpgan(src_image_path)
+        enhanced_image_path = os.path.join(OUTPUT_FOLDER, "enhanced_src_image.png")
+        cv2.imwrite(enhanced_image_path, enhanced_image)
+        print(f"[DEBUG] Enhanced image saved to: {enhanced_image_path}")
+
+        # Remove background using ClipDrop API
+        print("[DEBUG] Background removal started with ClipDrop...")
+        output_image = remove_background_with_clipdrop(enhanced_image_path)
+        print("[DEBUG] Background removal completed with ClipDrop.")
+
+        # Save the image with background removed
+        with open(clipdrop_output_path, "wb") as output_file:
+            output_file.write(output_image)
+        print(f"[DEBUG] Background-removed image saved to: {clipdrop_output_path}")
+
+        # Composite the result over the background image using OpenCV
+        print("[DEBUG] Compositing images...")
+        background = cv2.imread(bgr_image_path)
+        foreground = cv2.imread(clipdrop_output_path, cv2.IMREAD_UNCHANGED)  # Load with alpha channel
+
+        # Resize foreground to match background dimensions (if needed)
+        foreground = cv2.resize(foreground, (background.shape[1], background.shape[0]))
+
+        # Extract the alpha channel from the foreground
+        alpha = foreground[:, :, 3] / 255.0
+        alpha = cv2.merge([alpha, alpha, alpha])
+
+        # Composite the images
+        composite = (foreground[:, :, :3] * alpha + background * (1 - alpha)).astype(np.uint8)
+
+        # Add a white border to the final image
+        print("[DEBUG] Adding white border to the final image...")
+        composite_with_border = add_white_border(composite, border_size=20)
+        print("[DEBUG] White border added.")
+
+        # Save the final composited image with border
+        cv2.imwrite(output_path, composite_with_border)
+        print(f"[DEBUG] Final composited image with border saved to: {output_path}")
+
+        # Convert the composited image to a PNG buffer
+        _, buffer = cv2.imencode(".png", composite_with_border)
+        png_buffer = io.BytesIO(buffer)
+        print("[DEBUG] Composited image converted to PNG buffer.")
 
         # Return the processed image as a response
         png_buffer.seek(0)  # Reset buffer position to the beginning
