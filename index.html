@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Remove Person, Keep Background (RVM)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix"></script>
+    <style>
+        body { text-align: center; background: black; color: white; margin: 0; overflow: hidden; }
+        video, canvas { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: cover; }
+        #background-selector { position: absolute; top: 50%; left: 50%; z-index: 10; background-position: center; background-size: contain; }
+    </style>
+</head>
+<body>
+    <input type="file" id="background-selector" accept="image/*">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="output"></canvas>
+
+    <script>
+        const video = document.getElementById("video");
+        const canvas = document.getElementById("output");
+        const ctx = canvas.getContext("2d");
+        let bgImage = null;
+
+        async function startCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                video.play();
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                runSegmentation();
+            };
+        }
+
+        async function runSegmentation() {
+            const net = await bodyPix.load({
+                architecture: 'ResNet50',
+                outputStride: 16,
+                quantBytes: 2
+            });
+
+            async function processFrame() {
+                const segmentation = await net.segmentPerson(video, {
+                    internalResolution: 'medium',
+                    segmentationThreshold: 0.7
+                });
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                // Draw background
+                if (bgImage) {
+                    ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+                } else {
+                    ctx.fillStyle = "black";
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
+
+                const mask = segmentation.data;
+                const videoData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                for (let i = 0; i < mask.length; i++) {
+                    if (mask[i] === 1) { 
+                        videoData.data[i * 4 + 3] = 0; // Remove the person (transparent)
+                    }
+                }
+
+                ctx.putImageData(videoData, 0, 0);
+                requestAnimationFrame(processFrame);
+            }
+
+            processFrame();
+        }
+
+        document.getElementById("background-selector").addEventListener("change", (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    const img = new Image();
+                    img.onload = () => { bgImage = img; };
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        startCamera();
+    </script>
+</body>
+</html>
